@@ -80,8 +80,7 @@ BALFOUR_STATION = {
 # anti-horaire (RFC 7946 valide). Surface ≈ 0.85 km² (sous 1 km²).
 # Inclut la station Balfour à la frontière NW pour le critère distance.
 # ---------------------------------------------------------------------------
-STUDY_POLYGON_WGS84 = {"type": "Polygon", "coordinates": [[[34.745035, 32.01747], [34.749069, 32.016306], [34.744005, 32.010049], [34.741516, 32.01114], [34.745035, 32.01747]]]}
-
+STUDY_POLYGON_WGS84 = {"type": "Polygon", "coordinates": [[[34.74937, 32.029506], [34.74407, 32.03238], [34.741559, 32.028906], [34.741945, 32.024851], [34.745722, 32.024996], [34.748404, 32.026706], [34.74937, 32.029506]]]}
 # ---------------------------------------------------------------------------
 # Sources data.gov.il (CKAN) — *CONFIRMED via API HTTP*
 #

@@ -16,6 +16,17 @@ outputs/
 *\ ([0-9]*).py
 *\ ([0-9]*).md
 
+# MCP / submodules
+mcp/
+
+# pytest cache
+.pytest_cache/
+
+# env / secrets
+.env
+.env.example
+.mcp.json
+
 # OS
 .DS_Store
 Thumbs.db

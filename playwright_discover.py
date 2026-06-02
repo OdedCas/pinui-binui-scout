@@ -1,12 +1,14 @@
 """
 Bat Yam GIS — API discovery via Playwright.
 
-Opens the Bat Yam GIS portal in a real Chromium browser, pans to the
-Ramat Yosef Nord study area, and records every network request made.
-Saves a report to  outputs/batyam_gis_apis.json  for inspection.
+Strategy:
+  1. Open GovMap focused on Ramat Yosef Nord — enable building layers,
+     click buildings to trigger identify/query requests.
+  2. Also visit www.batyam.muni.il to find their GIS link.
 
-Run from Windows:
-    python playwright_discover.py
+Saves report to outputs/batyam_gis_apis.json.
+
+Run: python playwright_discover.py
 """
 from __future__ import annotations
 
@@ -15,123 +17,150 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.sync_api import sync_playwright, Request
+from playwright.sync_api import sync_playwright
 
-ROOT    = Path(__file__).resolve().parent
-OUT     = ROOT / "outputs" / "batyam_gis_apis.json"
+ROOT = Path(__file__).resolve().parent
+OUT  = ROOT / "outputs" / "batyam_gis_apis.json"
 
-# Study area centre (Ramat Yosef Nord)
-LAT, LON = 32.024, 34.753
-
-# Candidate GIS URLs to try — script will try each until one loads
-GIS_CANDIDATES = [
-    "https://www.batyam.muni.il",          # main site — look for GIS link
-    "https://iview2.malam-team.com/iview2/?mun=6300",   # Malam IView2 (Bat Yam code)
-    "https://iview.batyam.muni.il",
-    "https://gis.batyam.muni.il",
-    "https://batyam.maps.arcgis.com",
-]
-
-KEYWORDS = [
-    "gis", "map", "mapa", "מפה", "iview", "arcgis", "feature",
-    "layer", "buildings", "מבנים", "שנת", "קומות", "parcel", "helka",
-]
+# Ramat Yosef Nord — GovMap URL centred on study area, zoom 16
+GOVMAP_URL = "https://www.govmap.gov.il/?c=34.752,32.024&z=16&lang=1"
+BATYAM_URL = "https://www.batyam.muni.il"
 
 
-def is_interesting(url: str) -> bool:
-    low = url.lower()
-    return any(k in low for k in KEYWORDS)
+def snap(page, name):
+    path = ROOT / "outputs" / f"discover_{name}.png"
+    try:
+        page.screenshot(path=str(path))
+        print(f"  screenshot → {path.name}")
+    except Exception as e:
+        print(f"  screenshot failed: {e}")
 
 
 def run():
     captured: list[dict] = []
 
-    def on_request(req: Request):
+    def on_request(req):
         url = req.url
-        if any(ext in url for ext in [".png", ".jpg", ".woff", ".css", ".gif", ".ico"]):
+        if any(url.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".woff", ".woff2", ".ttf", ".gif", ".ico", ".svg"]):
             return
-        if is_interesting(url) or req.resource_type in ("xhr", "fetch"):
-            captured.append({
-                "url":    url,
-                "method": req.method,
-                "type":   req.resource_type,
-                "post":   req.post_data[:300] if req.post_data else None,
-            })
+        if "/tile/" in url or "/tiles/" in url:
+            return
+        captured.append({
+            "url":    url,
+            "method": req.method,
+            "type":   req.resource_type,
+            "post":   req.post_data[:500] if req.post_data else None,
+        })
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, slow_mo=300)
-        ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+        browser = pw.chromium.launch(headless=False, slow_mo=150)
+        ctx = browser.new_context(
+            viewport={"width": 1400, "height": 900},
+            locale="he-IL",
+        )
         page = ctx.new_page()
         page.on("request", on_request)
 
-        # ── Step 1: find the GIS portal ──────────────────────────────────
-        gis_url = None
-        for candidate in GIS_CANDIDATES:
-            print(f"Trying: {candidate}")
-            try:
-                page.goto(candidate, wait_until="domcontentloaded", timeout=12000)
-                time.sleep(2)
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 1 — GovMap building layers
+        # ═══════════════════════════════════════════════════════════════
+        print(f"\n[1] GovMap → {GOVMAP_URL}")
+        try:
+            page.goto(GOVMAP_URL, wait_until="domcontentloaded", timeout=25000)
+        except Exception as e:
+            print(f"  nav warning: {e}")
 
-                # If it's the main site, hunt for a GIS/map link
-                if "batyam.muni.il" in candidate and "iview" not in candidate and "gis." not in candidate:
-                    links = page.evaluate("""() =>
-                        [...document.querySelectorAll('a')].map(a => ({
-                            text: a.innerText.trim(),
-                            href: a.href
-                        })).filter(a => a.href && /gis|map|מפה|iview|geo/i.test(a.href + a.text))
-                    """)
-                    if links:
-                        print("Found GIS links on main site:")
-                        for l in links[:8]:
-                            print(f"  {l['text'][:40]}  →  {l['href'][:80]}")
-                        gis_url = links[0]["href"]
-                        break
-                else:
-                    title = page.title()
-                    print(f"  Loaded: {title[:60]}")
-                    if page.url and "error" not in page.url.lower():
-                        gis_url = page.url
-                        break
-            except Exception as e:
-                print(f"  failed: {e}")
+        time.sleep(6)
+        print(f"  title: {page.title()}")
+        snap(page, "govmap_initial")
 
-        if not gis_url:
-            print("Could not find GIS portal. Trying govmap as fallback...")
-            gis_url = f"https://www.govmap.gov.il/?c={LON},{LAT}&z=14"
+        cx, cy = 700, 450
 
-        # ── Step 2: navigate to GIS and pan to study area ─────────────────
-        print(f"\nOpening GIS: {gis_url}")
-        page.goto(gis_url, wait_until="networkidle", timeout=30000)
+        # Zoom in further
+        print("  zooming in...")
+        for _ in range(4):
+            page.mouse.wheel(0, -500)
+            time.sleep(0.8)
         time.sleep(3)
-        print(f"Page title: {page.title()}")
+        snap(page, "govmap_zoomed")
 
-        # Interact — try to click around to trigger data loads
-        for _ in range(3):
+        # Click buildings on the map to trigger identify requests
+        print("  clicking buildings...")
+        for dx, dy in [(0,0), (60,0), (-60,0), (0,60), (0,-60), (40,40), (-40,40), (80,30), (-80,30)]:
+            page.mouse.click(cx+dx, cy+dy)
+            time.sleep(2)
+
+        # Try to find and click layer panel / buildings toggle
+        print("  looking for layer controls...")
+        for sel in [
+            "button[title*='שכב']", "button[aria-label*='layer']",
+            "[class*='layer-btn']", "[class*='layers']",
+            "button[title*='Layer']", "[data-layer*='building']",
+            "button[title*='מבנ']",
+        ]:
             try:
-                page.mouse.move(700, 450)
-                page.mouse.click(700, 450)
-                time.sleep(1)
-                page.mouse.wheel(0, -300)   # zoom in
-                time.sleep(1)
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click()
+                    time.sleep(2)
+                    print(f"    clicked: {sel}")
             except Exception:
                 pass
 
-        time.sleep(4)
+        # More clicks after potential layer activation
+        for dx, dy in [(0,0), (50,20), (-50,20), (20,-50), (-20,-50)]:
+            page.mouse.click(cx+dx, cy+dy)
+            time.sleep(2)
 
-        # ── Step 3: save screenshot + requests ───────────────────────────
-        screenshot = ROOT / "outputs" / "batyam_gis_screenshot.png"
+        time.sleep(3)
+        snap(page, "govmap_after_clicks")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 2 — Bat Yam municipality website → find GIS link
+        # ═══════════════════════════════════════════════════════════════
+        print(f"\n[2] Bat Yam site → {BATYAM_URL}")
         try:
-            page.screenshot(path=str(screenshot), full_page=False)
-            print(f"Screenshot saved: {screenshot}")
-        except Exception as e:
-            print(f"Screenshot failed: {e}")
+            page.goto(BATYAM_URL, wait_until="domcontentloaded", timeout=20000)
+            time.sleep(4)
+            print(f"  title: {page.title()}")
+            snap(page, "batyam_main")
 
+            # Extract all GIS/map links
+            links = page.evaluate("""() =>
+                [...document.querySelectorAll('a[href]')].map(a => ({
+                    text: (a.innerText || a.title || '').trim().slice(0,60),
+                    href: a.href
+                })).filter(a =>
+                    /gis|map|מפה|iview|geo|מיפוי|שכב/i.test(a.href + ' ' + a.text)
+                )
+            """)
+            print(f"  GIS links found: {len(links)}")
+            for l in links[:10]:
+                print(f"    {l['text']:<40} → {l['href'][:80]}")
+
+            # Navigate to the first GIS link found
+            if links:
+                gis_href = links[0]["href"]
+                print(f"\n  Navigating to: {gis_href}")
+                try:
+                    page.goto(gis_href, wait_until="domcontentloaded", timeout=25000)
+                    time.sleep(8)
+                    print(f"  title: {page.title()}")
+                    snap(page, "batyam_gis")
+                    # Interact
+                    for dx, dy in [(0,0), (60,30), (-60,30), (30,-60)]:
+                        page.mouse.click(cx+dx, cy+dy)
+                        time.sleep(2)
+                except Exception as e:
+                    print(f"  GIS nav failed: {e}")
+
+        except Exception as e:
+            print(f"  Bat Yam site failed: {e}")
+
+        time.sleep(3)
         browser.close()
 
-    # ── Report ────────────────────────────────────────────────────────────
-    print(f"\nCaptured {len(captured)} requests total")
-
-    # Deduplicate by domain+path (ignore query params for grouping)
+    # ── Build report ─────────────────────────────────────────────────────
     unique: dict[str, dict] = {}
     for req in captured:
         p = urlparse(req["url"])
@@ -139,32 +168,43 @@ def run():
         if key not in unique:
             unique[key] = req
 
-    print(f"Unique endpoints: {len(unique)}")
-
-    # Flag ones that look like they return building attributes
-    building_candidates = [
+    building_kw = [
+        "feature", "query", "identify", "getfeature", "getmap",
+        "mapserver", "featureserver", "wfs", "wms",
+        "mivne", "binyan", "shnat", "floor", "koma", "building",
+        "entitiesbypoint", "getlayerdata", "layerdata",
+    ]
+    candidates = [
         r for r in unique.values()
-        if any(k in r["url"].lower() for k in [
-            "building", "mivne", "binyan", "shnat", "year", "floor", "koma",
-            "FeatureServer", "MapServer", "query", "wfs", "mivna",
-        ])
+        if r["type"] in ("xhr", "fetch")
+        and any(k in r["url"].lower() for k in building_kw)
+        and "cdn" not in r["url"]
+        and "googleapis" not in r["url"]
     ]
 
+    xhr_all = [r for r in unique.values() if r["type"] in ("xhr", "fetch")]
+
     report = {
-        "gis_url": gis_url,
         "total_captured": len(captured),
         "unique_endpoints": list(unique.values()),
-        "building_candidates": building_candidates,
+        "xhr_fetch": xhr_all,
+        "building_candidates": candidates,
     }
-
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\nReport saved: {OUT}")
-    print("\n=== BUILDING CANDIDATES ===")
-    for r in building_candidates:
+
+    print(f"\n{'='*60}")
+    print(f"Report: {OUT}")
+    print(f"\n=== BUILDING CANDIDATES ({len(candidates)}) ===")
+    for r in candidates:
+        print(f"  {r['method']} {r['url'][:130]}")
+        if r.get("post"):
+            print(f"     POST: {r['post'][:120]}")
+    print(f"\n=== ALL XHR/FETCH ({len(xhr_all)}) ===")
+    for r in xhr_all:
         print(f"  {r['method']} {r['url'][:120]}")
-    if not building_candidates:
-        print("  (none found — check outputs/batyam_gis_apis.json for all endpoints)")
+        if r.get("post"):
+            print(f"     POST: {r['post'][:100]}")
 
 
 if __name__ == "__main__":
