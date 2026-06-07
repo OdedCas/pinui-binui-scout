@@ -45,19 +45,19 @@ def _patch_config(polygon: dict) -> None:
     if start is None:
         raise ValueError("STUDY_POLYGON_WGS84 not found in config.py")
 
-    # Walk forward tracking brace depth to find the closing } of the block
+    # Walk forward tracking brace depth to find the full assignment block.
+    # Handle both one-line and multi-line dict literals safely.
     depth = 0
+    seen_open = False
     end = start
     for i in range(start, len(lines)):
         for ch in lines[i]:
             if ch == "{":
                 depth += 1
+                seen_open = True
             elif ch == "}":
                 depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        if depth == 0 and i > start:
+        if seen_open and depth == 0:
             end = i
             break
 

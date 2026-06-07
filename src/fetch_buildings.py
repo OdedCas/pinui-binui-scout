@@ -23,7 +23,11 @@ from src.http_client import HttpError, get_json
 
 log = logging.getLogger(__name__)
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -47,14 +51,31 @@ def fetch_osm_buildings(polygon_wgs: dict) -> gpd.GeoDataFrame:
     s, w, n, e = min(lats), min(lons), max(lats), max(lons)
     q = _OVERPASS_TEMPLATE.format(s=s, w=w, n=n, e=e)
     log.info("[FETCH] OSM Overpass bbox=%s,%s,%s,%s", s, w, n, e)
-    r = requests.post(
-        OVERPASS_URL,
-        data={"data": q},
-        timeout=120,
-        headers={"User-Agent": config.USER_AGENT},
-    )
-    r.raise_for_status()
-    elements = r.json().get("elements", [])
+    elements = None
+    last_error = None
+    for attempt, url in enumerate(OVERPASS_URLS, start=1):
+        try:
+            log.info("[FETCH] OSM attempt %d via %s", attempt, url)
+            r = requests.post(
+                url,
+                data={"data": q},
+                timeout=120,
+                headers={"User-Agent": config.USER_AGENT},
+            )
+            r.raise_for_status()
+            elements = r.json().get("elements", [])
+            break
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            log.warning("[FETCH] OSM %s → KO (%s)", url, str(exc)[:160])
+            if attempt < len(OVERPASS_URLS):
+                time.sleep(min(attempt * 2, 6))
+
+    if elements is None:
+        raise RuntimeError(
+            "OSM Overpass failed on all mirrors. Last error: %s" % last_error
+        )
+
     log.info("[FETCH] OSM → %d éléments", len(elements))
 
     records = []
