@@ -14,10 +14,11 @@ import subprocess
 import sys
 import threading
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+HOST = "127.0.0.1"
 PORT = 8765
 
 _jobs: dict[str, dict] = {}
@@ -185,12 +186,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("localhost", PORT), Handler)
-    url = f"http://localhost:{PORT}"
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    url = f"http://{HOST}:{PORT}"
     print(f"\n  Pinui-Binui Scout is running at  {url}\n")
     print("  Open that URL in your browser.")
     print("  Press Ctrl+C to stop.\n")
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

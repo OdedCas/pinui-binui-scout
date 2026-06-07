@@ -2498,11 +2498,20 @@ document.getElementById("modal-search").addEventListener("input", e => {
 });
 
 // =============== Draw Zone ===============
-const DZ_SERVER = "http://localhost:8765";
+const DZ_SERVER = window.location.protocol === "file:"
+  ? "http://127.0.0.1:8765"
+  : window.location.origin;
 let _drawControl = null;
 let _drawnItems  = null;
 let _drawActive  = false;
 let _dzPolygon   = null;  // GeoJSON polygon from last draw
+
+function dzFetchWithTimeout(url, options = {}, timeoutMs = 1500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const merged = { ...options, signal: controller.signal };
+  return fetch(url, merged).finally(() => clearTimeout(timer));
+}
 
 function toggleDrawZone() {
   const btn = document.getElementById("draw-zone-btn");
@@ -2569,7 +2578,7 @@ function toggleDrawZone() {
 }
 
 function dzCheckServer() {
-  fetch(DZ_SERVER + "/ping", { signal: AbortSignal.timeout(1500) })
+  dzFetchWithTimeout(DZ_SERVER + "/ping")
     .then(r => r.ok ? dzShowPanel("server") : dzShowPanel("fallback"))
     .catch(() => dzShowPanel("fallback"));
 }
@@ -2591,8 +2600,13 @@ function dzRunPipeline() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ polygon: _dzPolygon }),
   })
-  .then(r => r.json())
-  .then(({ job_id }) => dzPoll(job_id))
+  .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+  .then(({ job_id, error }) => {
+    if (!job_id) {
+      throw new Error(error || "Server did not return a job id");
+    }
+    dzPoll(job_id);
+  })
   .catch(err => {
     document.getElementById("dz-log").textContent = "Could not reach server: " + err;
     document.getElementById("dz-error-msg").style.display = "block";
@@ -2603,7 +2617,7 @@ function dzPoll(jobId) {
   const logEl = document.getElementById("dz-log");
   const iv = setInterval(() => {
     fetch(DZ_SERVER + "/poll/" + jobId)
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
       .then(({ status, log }) => {
         logEl.textContent = log.join("\n");
         logEl.scrollTop = logEl.scrollHeight;
@@ -2615,6 +2629,11 @@ function dzPoll(jobId) {
           clearInterval(iv);
           document.getElementById("dz-error-msg").style.display = "block";
         }
+      })
+      .catch(err => {
+        clearInterval(iv);
+        logEl.textContent += (logEl.textContent ? "\n" : "") + "Polling failed: " + err;
+        document.getElementById("dz-error-msg").style.display = "block";
       });
   }, 1000);
 }
